@@ -5,6 +5,7 @@ using Azure.ResourceManager.Compute;
 using Azure.ResourceManager.Compute.Models;
 using Azure.Security.KeyVault.Secrets;
 using AzureDiscordBot.Interfaces;
+using Serilog;
 using System;
 using System.Threading.Tasks;
 
@@ -14,17 +15,17 @@ namespace AzureDiscordBot.Services
     {
         internal SecretClient _secretClient;
         internal DefaultAzureCredential _credential;
-        internal static KeyVaultSecret _secretVmId;
-        internal static KeyVaultSecret _secretUsername;
-        internal static KeyVaultSecret _secretPassword;
-        internal static KeyVaultSecret _secretDiscordToken;
-        internal static KeyVaultSecret _secretValheimUrl;
-        internal static KeyVaultSecret _secretValheimPassword;
-        internal static KeyVaultSecret _secretVrisingUrl;
-        internal static KeyVaultSecret _secretVrisingPassword;
-        internal static ResourceIdentifier _vmId;
-        internal static ArmClient _armClient;
-        internal static VirtualMachineResource _vm;
+        internal KeyVaultSecret _secretVmId;
+        internal KeyVaultSecret _secretUsername;
+        internal KeyVaultSecret _secretPassword;
+        internal KeyVaultSecret _secretDiscordToken;
+        internal KeyVaultSecret _secretValheimUrl;
+        internal KeyVaultSecret _secretValheimPassword;
+        internal KeyVaultSecret _secretVrisingUrl;
+        internal KeyVaultSecret _secretVrisingPassword;
+        internal ResourceIdentifier _vmId;
+        internal ArmClient _armClient;
+        internal VirtualMachineResource _vm;
 
         /// <summary>
         /// Constructor.
@@ -32,41 +33,45 @@ namespace AzureDiscordBot.Services
         /// <param name="secretClient"></param>
         /// <param name="credential"></param>
         /// <exception cref="ArgumentNullException"></exception>
-        public ServerManagementService(SecretClient secretClient, DefaultAzureCredential credential)
+        public ServerManagementService(SecretClient secretClient, DefaultAzureCredential credential, KeyVaultSecret secretVmId, KeyVaultSecret secretUsername,
+            KeyVaultSecret secretPassword, KeyVaultSecret secretValheimUrl, KeyVaultSecret secretValheimPassword,
+            KeyVaultSecret secretVrisingUrl, KeyVaultSecret secretVrisingPassword, ResourceIdentifier vmId, ArmClient armClient, VirtualMachineResource vm)
         {
             _secretClient = secretClient ?? throw new ArgumentNullException(nameof(secretClient));
             _credential = credential ?? throw new ArgumentNullException(nameof(credential));
-            GetSecrets();
-        }
-
-        /// <summary>
-        /// Gets the key vault secrets.
-        /// </summary>
-        private void GetSecrets()
-        {
-            _secretVmId = _secretClient.GetSecret("VmId") ?? throw new ArgumentNullException(nameof(_secretVmId));
-            _secretUsername = _secretClient.GetSecret("username") ?? throw new ArgumentNullException(nameof(_secretUsername));
-            _secretPassword = _secretClient.GetSecret("password") ?? throw new ArgumentNullException(nameof(_secretPassword));
-            _secretValheimUrl = _secretClient.GetSecret("valheimUrl") ?? throw new ArgumentNullException(nameof(_secretValheimUrl));
-            _secretValheimPassword = _secretClient.GetSecret("valheimPassword") ?? throw new ArgumentNullException(nameof(_secretValheimPassword));
-            _secretVrisingUrl = _secretClient.GetSecret("vrisingUrl") ?? throw new ArgumentNullException(nameof(_secretVrisingUrl));
-            _secretVrisingPassword = _secretClient.GetSecret("vrisingPassword") ?? throw new ArgumentNullException(nameof(_secretVrisingPassword));
-            _vmId = new ResourceIdentifier(_secretVmId.Value) ?? throw new ArgumentNullException(nameof(_vmId));
-            _armClient = new ArmClient(_credential) ?? throw new ArgumentNullException(nameof(_armClient));
-            _vm = _armClient.GetVirtualMachineResource(_vmId) ?? throw new ArgumentNullException(nameof(_vm));
+            _secretVmId = secretVmId ?? throw new ArgumentNullException(nameof(secretVmId));
+            _secretUsername = secretUsername ?? throw new ArgumentNullException(nameof(secretUsername));
+            _secretPassword = secretPassword ?? throw new ArgumentNullException(nameof(secretPassword));
+            _secretValheimUrl = secretValheimUrl ?? throw new ArgumentNullException(nameof(secretValheimUrl));
+            _secretValheimPassword = secretValheimPassword ?? throw new ArgumentNullException(nameof(secretValheimPassword));
+            _secretVrisingUrl = secretVrisingUrl ?? throw new ArgumentNullException(nameof(secretVrisingUrl));
+            _secretVrisingPassword = secretVrisingPassword ?? throw new ArgumentNullException(nameof(secretVrisingPassword));
+            _vmId = vmId ?? throw new ArgumentNullException(nameof(vmId));
+            _armClient = armClient ?? throw new ArgumentNullException(nameof(armClient));
+            _vm = vm ?? throw new ArgumentNullException(nameof(vm));
         }
 
         /// <summary>
         /// Starts the virtual machine.
         /// </summary>
         /// <returns></returns>
-        public async Task StartVm() => await _vm.PowerOnAsync(Azure.WaitUntil.Completed);
+        public async Task StartVm()
+        {
+            Log.Logger.Information($"Starting VM.");
+            await _vm.PowerOnAsync(Azure.WaitUntil.Completed);
+            Log.Logger.Information($"Started VM.");
+        }
 
         /// <summary>
         /// Stops the virtual machine.
         /// </summary>
         /// <returns></returns>
-        public async Task StopVm() => await _vm.DeallocateAsync(Azure.WaitUntil.Started);
+        public async Task StopVm()
+        {
+            Log.Logger.Information($"Stopping VM.");
+            await _vm.DeallocateAsync(Azure.WaitUntil.Started);
+            Log.Logger.Information($"Stopped VM.");
+        }
 
         /// <summary>
         /// Gets the power state of the virtual machine.
@@ -74,15 +79,23 @@ namespace AzureDiscordBot.Services
         /// <returns></returns>
         public async Task<string> GetVmStatus()
         {
+            var cleanPowerState = string.Empty;
             var vmStatus = await _vm.GetAsync();
+            Log.Logger.Information($"Getting VM status.");
+
             if (vmStatus is not null)
             {
                 var vmState = vmStatus.Value.InstanceView().Value.Statuses[1].Code;
                 string vmPowerState = vmState.Replace("PowerState/", string.Empty);
-                return vmPowerState == "deallocated" ? "Stopped" : "Running";
+                cleanPowerState = vmPowerState == "deallocated" ? "Stopped" : "Running";
+            }
+            else
+            {
+                cleanPowerState = "Unknown";
             }
 
-            return "Unknown";
+            Log.Logger.Information($"VM is {cleanPowerState}.");
+            return cleanPowerState;
         }
 
         /// <summary>
@@ -98,6 +111,9 @@ namespace AzureDiscordBot.Services
                 throw new ArgumentNullException(nameof(name));
             }
 
+            var gameState = string.Empty;
+
+            Log.Logger.Information($"Getting status of {name}.");
             RunCommandInput command = new("RunPowerShellScript")
             {
                 Script = { $"(Get-ScheduledTask -TaskName '{name} start').State" }
@@ -106,10 +122,16 @@ namespace AzureDiscordBot.Services
             var result = await _vm.RunCommandAsync(Azure.WaitUntil.Completed, command);
             if (result.HasValue)
             {
-                return result.Value.Value[0].Message;
+                gameState = result.Value.Value[0].Message;
             }
 
-            return string.Empty;
+            if (gameState.ToLower().Equals("ready"))
+            {
+                gameState = "Stopped";
+            }
+
+            Log.Logger.Information($"{name} is {gameState}.");
+            return gameState;
         }
 
         /// <summary>
@@ -125,12 +147,14 @@ namespace AzureDiscordBot.Services
                 throw new ArgumentNullException(nameof(name));
             }
 
+            Log.Logger.Information($"Starting {name}.");
             RunCommandInput command = new("RunPowerShellScript")
             {
                 Script = { $"Start-ScheduledTask -TaskName '{name} start'" }
             };
 
             await _vm.RunCommandAsync(Azure.WaitUntil.Completed, command);
+            Log.Logger.Information($"Started {name}.");
         }
 
         /// <summary>
@@ -146,12 +170,14 @@ namespace AzureDiscordBot.Services
                 throw new ArgumentNullException(nameof(name));
             }
 
+            Log.Logger.Information($"Stopping {name}.");
             RunCommandInput command = new("RunPowerShellScript")
             {
                 Script = { $"Start-ScheduledTask -TaskName '{name} stop'" }
             };
 
             await _vm.RunCommandAsync(Azure.WaitUntil.Completed, command);
+            Log.Logger.Information($"Stopped {name}.");
         }
 
         /// <summary>
@@ -167,12 +193,15 @@ namespace AzureDiscordBot.Services
                 throw new ArgumentNullException(nameof(name));
             };
 
+            Log.Logger.Information($"Starting update for {name}.");
+
             RunCommandInput command = new("RunPowerShellScript")
             {
                 Script = { $"Start-ScheduledTask -TaskName '{name} update'" }
             };
 
             await _vm.RunCommandAsync(Azure.WaitUntil.Completed, command);
+            Log.Logger.Information($"Updated {name}.");
         }
 
         /// <summary>
@@ -187,18 +216,15 @@ namespace AzureDiscordBot.Services
                 throw new ArgumentNullException(nameof(name));
             };
 
-            var info = string.Empty;
             switch (name)
             {
                 case "Valheim":
-                    info = $"{name} Connection info:\r\nIP: {_secretValheimUrl.Value}\r\nPassword: {_secretValheimPassword.Value} \r\n";
-                    break;
+                    return $"{name} Connection info:\r\nIP: {_secretValheimUrl.Value}\r\nPassword: {_secretValheimPassword.Value} \r\n";
                 case "VRising":
-                    info = $"{name} Connection info:\r\nIP: {_secretVrisingUrl.Value}\r\nLanServer: Checked\r\nPassword: {_secretVrisingPassword.Value}\r\n";
-                    break;
+                    return $"{name} Connection info:\r\nIP: {_secretVrisingUrl.Value}\r\nLanServer: Checked\r\nPassword: {_secretVrisingPassword.Value}\r\n";
             }
 
-            return info;
+            return string.Empty;
         }
     }
 }
